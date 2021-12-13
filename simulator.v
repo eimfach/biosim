@@ -34,9 +34,9 @@ mut:
 	show_grid bool
 	debug_grid [][]DebugGridTile = [][]DebugGridTile{}
   seed []u32
-	skip_draw bool
 	jump_enabled bool
 	tick_jump i64
+	mode Mode
 }
 
 enum UpdateThreshold {
@@ -66,6 +66,26 @@ fn (mut app App) reset() {
 	app.tick_count = 0
 	init(mut app)
 }
+
+struct Pause {}
+
+struct Jump {
+	to_tick i64
+}
+
+struct Play {}
+
+struct WaitForInput {
+	next_mode Mode
+}
+
+struct String {}
+struct Integer {}
+struct Integer64 {}
+
+type OutputMode = String | Integer | Integer64
+
+type Mode = Pause | Jump | Play | WaitForInput
 
 struct Coordinate {
 	x f32
@@ -120,8 +140,8 @@ fn (mut c Creature) use_movement_energy() {
 		nt -= 5
 	}
 	
-	if c.genome.immune_system.has(.strong_defender) {
-		nt -= 10
+	if c.genome.immune_system.all(.defender | .strong_defender) {
+		nt -= 5
 	}
 
 	if c.genome.social.has(.predator) {
@@ -281,6 +301,7 @@ enum Direction {
 fn main() {
 	mut app := &App{
 		gg: 0
+		mode: Play{}
 	}
 	app.gg = gg.new_context(
 		bg_color: gx.white
@@ -306,7 +327,7 @@ fn init(mut app App) {
 	if app.seed.len == 2 {
 		println('seeding fixed: $app.seed')
 		rand.seed(app.seed)
-		app.paused = true
+		app.mode = Pause{}
 	}
 
 	mut creatures := init_creatures(init_creature_count)
@@ -371,8 +392,51 @@ fn init_grid (mut creatures []Creature) [][]GridTile {
 
 
 fn frame(mut app &App) {
+
+	match app.mode {
+		Pause {}
+		WaitForInput {
+			inp := os.input('Input tick to jump to (current: $app.tick_count):')
+			mode := app.mode as WaitForInput
+			
+			match mode.next_mode {
+				Pause {app.mode = mode.next_mode}
+				WaitForInput {app.mode = mode.next_mode}
+				Jump {
+					to_tick := inp.i64()
+					println('Jumping to tick: $to_tick ... this might take some time ...')
+					app.mode = Jump{to_tick: to_tick}
+				}
+				Play {app.mode = mode.next_mode}
+			}
+		}
+		Jump {
+			mode := app.mode as Jump
+			if mode.to_tick == app.tick_count {
+				println('Jumped to tick $mode.to_tick, press space to continue ...')
+				app.mode = Pause{}
+				app.gg.begin()
+				app.draw()
+				app.gg.end()
+			} else {
+				run_tick(mut app)
+			}
+		}
+		Play {
+			run_tick(mut app)
+			app.gg.begin()
+			app.draw()
+			app.gg.end()
+		}
+	}
+
+}
+
+fn run_tick(mut app &App) {
 	now := time.ticks()
-	if app.accumulator >= app.update_time && !app.paused {
+
+	if app.accumulator >= app.update_time {
+
 		for i, mut row in app.grid {
 			for j, mut tile in row {
 
@@ -396,54 +460,14 @@ fn frame(mut app &App) {
 				
 			}
 		}
-		
+
 		app.accumulator = 0
 		app.tick_count += 1
 	}
 
-	if app.skip_draw {
-		if app.jump_enabled {
-			app.jump_to_tick()
-		}
-	} else {
-		app.gg.begin()
-		app.draw()
-		app.gg.end()
-	}
-
-
-
-	if !app.paused {
-		app.accumulator += now - app.ticks
-		app.ticks = now
-	}
-
-}
-
-fn (mut app App) jump_to_tick () {
-	if app.tick_jump == 0 {
-
-		for app.tick_jump <= app.tick_count {
-			inp := os.input('Input tick to jump to (current: $app.tick_count):')
-			app.tick_jump = inp.i64()
-		}
-
-		println('Jumping to tick: $app.tick_jump ... this might take some time ...')
-		app.paused = false
-		app.update_time = 0
-		app.gg.set_bg_color(gx.black)
-		app.gg.begin()
-		app.draw()
-		app.gg.end()
-
-	} else if app.tick_jump == app.tick_count{
-		print('Jumped to tick: $app.tick_count')
-		app.skip_draw = false
-		app.tick_jump = 0
-		app.jump_enabled = false
-		app.paused = true
-		app.gg.set_bg_color(gx.white)
-	}
+	app.accumulator += now - app.ticks
+	app.ticks = now
+		
 }
 
 [live]
@@ -518,75 +542,88 @@ fn draw_grid(app &App,tile GridTile) {
 }
 
 fn on_click(x f32, y f32, btn gg.MouseButton, mut app &App) {
-	if btn == .left && app.paused {
-		ix := int(x)
-		iy := int(y)
-		for row in app.grid {
-			for tile in row {
-				if ix >= tile.x && ix <= tile.x + 10 && iy >= tile.y && iy <= tile.y + 10 {
-					match tile.occupation {
-						Occupied {
-							match tile.occupation.inhabitant {
-								Creature {
-									dump(tile.occupation.inhabitant)
+	match app.mode {
+		Pause {
+			if btn == .left {
+				ix := int(x)
+				iy := int(y)
+				for row in app.grid {
+					for tile in row {
+						if ix >= tile.x && ix <= tile.x + 10 && iy >= tile.y && iy <= tile.y + 10 {
+							match tile.occupation {
+								Occupied {
+									match tile.occupation.inhabitant {
+										Creature {
+											dump(tile.occupation.inhabitant)
+										}
+										SomethingElse {}
+									}
 								}
-								SomethingElse {}
+								Empty {}
+								BedRock {}
 							}
 						}
-						Empty {}
-						BedRock {}
 					}
 				}
 			}
 		}
+		else {}
 	}
+
 }
 
 fn on_keydown(code gg.KeyCode, mod gg.Modifier, mut app &App) {
-	if app.jump_enabled {
-		return
+	match app.mode {
+		Play {
+			match code {
+				.space {app.mode = Pause{}}
+				.d {
+					app.debug = !app.debug
+				}
+				.r {
+					app.reset()
+				}
+				.g {
+					app.show_grid = !app.show_grid
+				}
+				.t {
+					if mod == .shift {
+						app.mode = WaitForInput{
+							next_mode: Jump{}
+						}
+					} else {
+						println('current tick: $app.tick_count')
+					}
+					
+				}
+				.right {
+					if mod == .shift {
+						app.refresh_update_threshold(.faster)
+					}
+					else {
+						app.refresh_update_threshold(.even_faster)
+					}
+				}
+				.left {
+					if mod == .shift {
+						app.refresh_update_threshold(.slower)
+					} else {
+						app.refresh_update_threshold(.even_slower)
+					}
+				}
+				else {}
+			}
+		}
+		Pause {
+			match code {
+				.space {app.mode = Play{}}
+				else {}
+			}
+		}
+		Jump {}
+		WaitForInput {}
 	}
 
-	match code {
-		.space {
-			app.paused = !app.paused
-		}
-		.d {
-			app.debug = !app.debug
-		}
-		.r {
-			app.reset()
-		}
-		.g {
-			app.show_grid = !app.show_grid
-		}
-		.t {
-			if mod == .shift {
-				app.paused = true
-				app.skip_draw = true
-				app.jump_enabled = true
-			} else {
-				println('current tick: $app.tick_count')
-			}
-			
-		}
-		.right {
-			if mod == .shift {
-				app.refresh_update_threshold(.faster)
-			}
-			else {
-				app.refresh_update_threshold(.even_faster)
-			}
-		}
-		.left {
-			if mod == .shift {
-				app.refresh_update_threshold(.slower)
-			} else {
-				app.refresh_update_threshold(.even_slower)
-			}
-		}
-		else {}
-	}
 }
 
 fn creature_ages(mut tile GridTile) {
@@ -816,9 +853,7 @@ fn hunt_direction(mut app &App, mut tile GridTile, mut inhabitant Creature, dir 
 			o := neighbour_tile.occupation as Occupied
 			mut n_creature := o.inhabitant as Creature
 
-			// TODO: if 0 == vmemcmp(&struct_a,  &struct_b, sizeof(struct_a))
-			// premature optimization ?
-			if n_creature.genome == inhabitant.genome && inhabitant.temp > 5 {
+			if has_similiar_genome(&byte(&n_creature.genome), &byte(&inhabitant.genome), 3) && inhabitant.temp > 10{
 				return
 			}
 
@@ -1140,6 +1175,22 @@ fn debug_genome() Genome {
 		social: .normal
 		ageing: .slower
 	}
+}
+
+fn has_similiar_genome(g1 &byte, g2 &byte, range int) bool {
+	if sizeof(g1) != sizeof(g2) {
+		panic('something went wrong')
+	}
+
+	mut c := 0
+	for i := 0; i<sizeof(g1); i++ {
+			if c >= range {
+					return false
+			}
+			c += unsafe { g1[i] - g2[i] }
+	}
+	// print('$c|')
+	return c < range && c > (-range)
 }
 
 fn rand_genome() Genome {

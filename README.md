@@ -33,8 +33,10 @@ Change the const `_SGL_DEFAULT_MAX_VERTICES` in the file `thirdparty/sokol/util/
 #define _SGL_DEFAULT_MAX_VERTICES (1<<19)
 ```
 
+To run the application simply type into a console:
+
 ```
-v run simulator.v
+v -gc boehm run simulator.v
 ```
 
 ## Controlling
