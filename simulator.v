@@ -22,21 +22,21 @@ const (
 
 struct App {
 mut:
-	gg    		     &gg.Context
-	grid		       [][]GridTile
+	gg &gg.Context
+	grid [][]GridTile
 	creature_count int
-	ticks          i64 = time.ticks()
-	accumulator    i64
-	tick_count		 i64
-	update_time	   int = 100
-	paused         bool
-	debug					 bool
-	show_grid			 bool
-	debug_grid 	   [][]DebugGridTile = [][]DebugGridTile{}
-  seed 					 []u32
-	skip_draw			 bool
-	jump_enabled	 bool
-	tick_jump      i64
+	ticks i64 = time.ticks()
+	accumulator i64
+	tick_count i64
+	update_time int = 100
+	paused bool
+	debug bool
+	show_grid bool
+	debug_grid [][]DebugGridTile = [][]DebugGridTile{}
+  seed []u32
+	skip_draw bool
+	jump_enabled bool
+	tick_jump i64
 }
 
 enum UpdateThreshold {
@@ -281,7 +281,6 @@ enum Direction {
 fn main() {
 	mut app := &App{
 		gg: 0
-		seed: [u32(43525), u32(53678)]
 	}
 	app.gg = gg.new_context(
 		bg_color: gx.white
