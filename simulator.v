@@ -197,7 +197,8 @@ fn (mut c Creature) flag_as_debug() {
 
 fn (mut c Creature) ages(a byte) {
 	na := c.age + a
-	if na < c.age {
+
+	if na == 255 || na < c.age {
 		c.age = 255
 	} else {
 		c.age = na
@@ -525,14 +526,25 @@ fn (app &App) draw() {
 
 fn draw_creature(app &App, tile &GridTile, c Creature) {
 	color := c.color
+	size := match_creature_draw_size(c)
+
 	match c.life {
 		.alive {
-			app.gg.draw_circle_with_segments(tile.x + 5, tile.y + 5, 2.5, 30, color)
+			app.gg.draw_circle_with_segments(tile.x + 5, tile.y + 5, size, 30, color)
 		}
 		.dead {
 			app.gg.draw_circle_line(tile.x + 5, tile.y + 5, 3, 15, color)
 		}
 	}
+}
+
+fn match_creature_draw_size(c Creature) f32 {
+	size := match true {
+		c.age < 5 {1.5}
+		c.age < 20 {2.0}
+		else {2.5}
+	}
+	return f32(size)
 }
 
 fn draw_debug_mark_creature(app &App, tile GridTile, color gx.Color) {
@@ -901,55 +913,60 @@ fn creature_moves(mut app App, mut row []GridTile, mut tile GridTile, i int, j i
 		BedRock {}
 		Occupied {
 			occupation := tile.occupation as Occupied
-			inhabitant := occupation.inhabitant
+			mut inhabitant := occupation.inhabitant
 
 			match inhabitant {
 				Creature {
-					if inhabitant.life == .dead || inhabitant.genome.movement == .unable {
-						return
-					}
-					if inhabitant.genome.social.has(.predator) && inhabitant.temp > 20
-						&& inhabitant.age < 40 {
-						return
-					}
+					mut c := occupation.inhabitant as Creature
 
-					mut chance_of_moving := match inhabitant.genome.metabolism {
+					if c.life == .dead || c.genome.movement == .unable {
+						return
+					}
+					if c.genome.social.has(.predator) && c.temp > 20 && c.age < 40 {
+						return
+					}
+					
+					mut chance_of_moving := match c.genome.metabolism {
 						.slow { rand.int_in_range(4, 64) }
 						.normal { rand.int_in_range(4, 32) }
 						.fast { rand.int_in_range(4, 8) }
 					}
 
-					if inhabitant.genome.immune_system.has(.defender) {
+					if c.genome.immune_system.has(.defender) {
 						chance_of_moving = chance_of_moving * 5
 					}
 
-					if inhabitant.genome.social.has(.sharing) {
-						if inhabitant.received_temp > 0 {
-							chance_of_moving = chance_of_moving * inhabitant.received_temp
+					if c.genome.social.has(.sharing) {
+						if c.received_temp > 0 {
+							chance_of_moving = chance_of_moving * c.received_temp
 						}
+					}
+
+					if chance_of_moving == 0 {
+						panic(c.genome.metabolism)
 					}
 					match rand.int_in_range(0, chance_of_moving) {
 						0 {
-							if inhabitant.genome.direction_sensor.has(.north) {
-								move_direction(mut app, mut tile, inhabitant, Direction.north,
+							if c.genome.direction_sensor.has(.north) {
+								move_direction(mut app, mut tile, mut c, Direction.north,
 									i, j)
 							}
 						}
 						1 {
-							if inhabitant.genome.direction_sensor.has(.east) {
-								move_direction(mut app, mut tile, inhabitant, Direction.east,
+							if c.genome.direction_sensor.has(.east) {
+								move_direction(mut app, mut tile, mut c, Direction.east,
 									i, j)
 							}
 						}
 						2 {
-							if inhabitant.genome.direction_sensor.has(.south) {
-								move_direction(mut app, mut tile, inhabitant, Direction.south,
+							if c.genome.direction_sensor.has(.south) {
+								move_direction(mut app, mut tile, mut c, Direction.south,
 									i, j)
 							}
 						}
 						3 {
-							if inhabitant.genome.direction_sensor.has(.west) {
-								move_direction(mut app, mut tile, inhabitant, Direction.west,
+							if c.genome.direction_sensor.has(.west) {
+								move_direction(mut app, mut tile, mut c, Direction.west,
 									i, j)
 							}
 						}
@@ -959,6 +976,27 @@ fn creature_moves(mut app App, mut row []GridTile, mut tile GridTile, i int, j i
 				SomethingElse {}
 			}
 		}
+	}
+}
+
+fn move_direction(mut app App, mut tile GridTile, mut c Creature, dir Direction, i int, j int) {
+	row_index, tile_index := match_direction(dir, i, j)
+	mut neighbour_row := app.grid[row_index] or { []GridTile{} }
+	mut neighbour_tile := neighbour_row[tile_index] or { create_bedrock() }
+
+	match neighbour_tile.occupation {
+		Empty {
+			c.use_movement_energy()
+			neighbour_tile.occupation = Occupied{c}
+			tile.occupation = Empty{}
+			app.grid[row_index][tile_index] = neighbour_tile
+
+			if app.debug && c.is_debug() {
+				debug_movement(mut app, tile, neighbour_tile)
+			}
+		}
+		BedRock {}
+		Occupied {}
 	}
 }
 
@@ -1093,33 +1131,6 @@ fn match_direction_to_gene(dir Direction) DirectionSensorGene {
 		.east { DirectionSensorGene.east }
 		.south { DirectionSensorGene.south }
 		.west { DirectionSensorGene.west }
-	}
-}
-
-fn move_direction(mut app App, mut tile GridTile, inhabitant Creature, dir Direction, i int, j int) {
-	row_index, tile_index := match_direction(dir, i, j)
-	mut neighbour_row := app.grid[row_index] or { []GridTile{} }
-	mut neighbour_tile := neighbour_row[tile_index] or { create_bedrock() }
-
-	match neighbour_tile.occupation {
-		Empty {
-			mut copy_creature := Creature{
-				genome: inhabitant.genome
-				color: inhabitant.color
-				life: inhabitant.life
-				temp: inhabitant.temp
-			}
-			copy_creature.use_movement_energy()
-			neighbour_tile.occupation = Occupied{copy_creature}
-			tile.occupation = Empty{}
-			app.grid[row_index][tile_index] = neighbour_tile
-
-			if app.debug && inhabitant.is_debug() {
-				debug_movement(mut app, tile, neighbour_tile)
-			}
-		}
-		BedRock {}
-		Occupied {}
 	}
 }
 
