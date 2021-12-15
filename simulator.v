@@ -614,7 +614,7 @@ fn on_keydown(code gg.KeyCode, mod gg.Modifier, mut app App) {
 							next_mode: Jump{}
 						}
 					} else {
-						println('current tick: $app.tick_count')
+						println('Current tick: $app.tick_count')
 					}
 				}
 				.right {
@@ -922,6 +922,7 @@ fn creature_moves(mut app App, mut row []GridTile, mut tile GridTile, i int, j i
 					if c.life == .dead || c.genome.movement == .unable {
 						return
 					}
+
 					if c.genome.social.has(.predator) && c.temp > 20 && c.age < 40 {
 						return
 					}
@@ -942,9 +943,6 @@ fn creature_moves(mut app App, mut row []GridTile, mut tile GridTile, i int, j i
 						}
 					}
 
-					if chance_of_moving == 0 {
-						panic(c.genome.metabolism)
-					}
 					match rand.int_in_range(0, chance_of_moving) {
 						0 {
 							if c.genome.direction_sensor.has(.north) {
@@ -1222,6 +1220,8 @@ fn debug_genome() Genome {
 		metabolism: .normal
 		social: .normal
 		ageing: .slower
+		immune_system: .normal
+		mutation_rate: .normal
 	}
 }
 
