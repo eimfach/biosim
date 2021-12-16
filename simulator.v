@@ -17,7 +17,10 @@ const (
 	win_height          = 800
 	lower_color_space   = 0x3f
 	upper_color_space   = 0xcf
+	max_temp 						= 32
 	repro_age           = 40
+	repro_cost					= 15
+	sharing_success_chance = 1
 	init_creature_count = 1000
 )
 
@@ -77,14 +80,6 @@ struct Play {}
 struct WaitForInput {
 	next_mode Mode
 }
-
-struct String {}
-
-struct Integer {}
-
-struct Integer64 {}
-
-type OutputMode = Integer | Integer64 | String
 
 type Mode = Jump | Pause | Play | WaitForInput
 
@@ -207,8 +202,8 @@ fn (mut c Creature) ages(a byte) {
 
 fn (mut c Creature) add_temp(t byte) {
 	nt := c.temp + t
-	if nt >= 32 {
-		c.temp = 32
+	if nt >= max_temp {
+		c.temp = max_temp
 	} else {
 		c.temp = nt
 	}
@@ -312,7 +307,6 @@ fn main() {
 	mut app := &App{
 		gg: 0
 		mode: Play{}
-		seed: [u32(43525), u32(53678)]
 	}
 	app.gg = gg.new_context(
 		bg_color: gx.white
@@ -453,18 +447,15 @@ fn run_tick(mut app App) {
 		for i, mut row in app.grid {
 			for j, mut tile in row {
 				creature_moves(mut app, mut row, mut tile, i, j)
+				creature_reproduces(mut app, mut row, mut tile, i, j)
 				creature_hunts(mut app, mut row, mut tile, i, j)
 				creature_exchanges_temp(mut app, mut row, mut tile, i, j)
 				// creatures eat, gain energy and temp
-				// creatures reproduce
-				creature_reproduces(mut app, mut row, mut tile, i, j)
-				// creatures die of old age
 				creature_dies_of_age(mut tile)
 				// creatures die of starvation
 				// creatures die of heat death
 				// creatures die of cold death
 				// creatures die of disease
-				// creatures age
 				creature_ages(mut tile)
 				if app.tick_count % 50 == 0 {
 					creature_decays(mut tile)
@@ -500,17 +491,9 @@ fn (app &App) draw() {
 								// draw_debug_movement_tracing(app, tile, color_space(inhabitant.genome))
 								// draw_debug_mark_creature(app, tile)
 								// }
-								if inhabitant.genome.mutation_rate.has(.insane) {
+								if inhabitant.genome.movement.has(.able) {
 									draw_debug_mark_creature(app, tile, gx.rgba(0x60,
-										0xa0, 0x60, 0xff))
-								}
-								if inhabitant.genome.mutation_rate.has(.fast) {
-									draw_debug_mark_creature(app, tile, gx.rgba(0x0, 0xcf,
-										0x0, 0xff))
-								}
-								if inhabitant.genome.mutation_rate.has(.faster) {
-									draw_debug_mark_creature(app, tile, gx.rgba(0xcf,
-										0x0, 0x0, 0xff))
+										0xa0, 0x80, 0xff))
 								}
 							}
 
@@ -758,6 +741,12 @@ fn creature_exchanges_temp(mut app App, mut row []GridTile, mut tile GridTile, i
 					mut c := inhabitant as Creature
 					mut neighbour_count := 0
 
+					sharing_xor_predator := (SocialGene.sharing | SocialGene.predator) & c.genome.social
+
+					if !c.genome.social.has(sharing_xor_predator) {
+						return
+					}
+
 					for dir in [Direction.north, Direction.east, Direction.south, Direction.west] {
 						row_index, tile_index := match_direction(dir, i, j)
 						n_row := app.grid[row_index] or { continue }
@@ -770,7 +759,15 @@ fn creature_exchanges_temp(mut app App, mut row []GridTile, mut tile GridTile, i
 								match n_inhabitant {
 									Creature {
 										n_creature := n_inhabitant as Creature
-										if n_creature.life == .alive {
+
+										n_is_alive := n_creature.life == .alive
+										n_has_dispostion := n_creature.genome.social.has(sharing_xor_predator)
+										
+										n_has_similar_genome := has_similiar_genome(c.genome, n_creature.genome, 3)
+										sharing_success := random_chance(sharing_success_chance)
+
+										if n_is_alive && n_has_dispostion && n_has_similar_genome && sharing_success {
+
 											neighbour_count += 1
 											c.exchange_temp()
 											tile.occupation = Occupied{c}
@@ -823,7 +820,7 @@ fn creature_hunts(mut app App, mut row []GridTile, mut tile GridTile, i int, j i
 					chance_of_hunting = if c.temp < 20 {
 						chance_of_hunting / 2
 					} else if c.temp < 15 {
-						4
+						2
 					} else {
 						chance_of_hunting
 					}
@@ -874,8 +871,7 @@ fn hunt_direction(mut app App, mut tile GridTile, mut inhabitant Creature, dir D
 			o := neighbour_tile.occupation as Occupied
 			mut n_creature := o.inhabitant as Creature
 
-			if has_similiar_genome(&n_creature.genome, &inhabitant.genome, 3)
-				&& inhabitant.temp > 10 {
+			if has_similiar_genome(inhabitant.genome, n_creature.genome, rand.int_in_range(1,4)) && inhabitant.temp > 10 {
 				return
 			}
 
@@ -883,10 +879,10 @@ fn hunt_direction(mut app App, mut tile GridTile, mut inhabitant Creature, dir D
 				inhabitant.add_temp(2)
 			} else if n_creature.genome.immune_system.has(.defender) {
 				inhabitant.remove_temp(byte(rand.int_in_range(1, 5)))
-				n_creature.remove_temp(byte(rand.int_in_range(1, 3)))
+				n_creature.remove_temp(byte(rand.int_in_range(1, 5)))
 
 				if n_creature.genome.immune_system.has(.strong_defender) {
-					inhabitant.remove_temp(byte(rand.int_in_range(5, 10)))
+					inhabitant.remove_temp(byte(rand.int_in_range(1, 5)))
 					n_creature.remove_temp(byte(rand.int_in_range(1, 3)))
 				}
 			} else {
@@ -897,9 +893,7 @@ fn hunt_direction(mut app App, mut tile GridTile, mut inhabitant Creature, dir D
 			if n_creature.life == .dead {
 				inhabitant.add_temp(n_creature.temp + 2)
 				inhabitant.use_movement_energy()
-				neighbour_tile.occupation = Occupied{
-					inhabitant: inhabitant
-				}
+				neighbour_tile.occupation = Occupied{inhabitant}
 				app.grid[row_index][tile_index] = neighbour_tile
 				tile.occupation = Empty{}
 			}
@@ -923,7 +917,7 @@ fn creature_moves(mut app App, mut row []GridTile, mut tile GridTile, i int, j i
 						return
 					}
 
-					if c.genome.social.has(.predator) && c.temp > 20 && c.age < 40 {
+					if c.genome.social.has(.predator) && c.temp > 20 && c.age < repro_age {
 						return
 					}
 					
@@ -1008,7 +1002,7 @@ fn creature_reproduces(mut app App, mut row []GridTile, mut tile GridTile, i int
 				SomethingElse {}
 				Creature {
 					mut c := inhabitant as Creature
-					if c.life == .dead || c.reproduced || c.age < repro_age || c.temp < 5 {
+					if c.life == .dead || c.age < repro_age || c.temp < 5 {
 						return
 					}
 
@@ -1026,6 +1020,12 @@ fn creature_reproduces(mut app App, mut row []GridTile, mut tile GridTile, i int
 						.slower { u32(f32(chance_of_reproducing) * 1.5) }
 					}
 
+					effective_repro_cost := match c.genome.metabolism {
+						.slow { byte(rand.int_in_range(repro_cost - 2, repro_cost + 2)) }
+						.normal { byte(rand.int_in_range(repro_cost, repro_cost + 4)) }
+						.fast { byte(rand.int_in_range(repro_cost + 2, repro_cost + 8)) }
+					}
+
 					// if inhabitant.genome.social.has(.sharing) {
 					// 	if inhabitant.received_temp > 0 {
 					// 		chance_of_reproducing = chance_of_reproducing * inhabitant.received_temp
@@ -1040,8 +1040,9 @@ fn creature_reproduces(mut app App, mut row []GridTile, mut tile GridTile, i int
 							mut indicies_neighbours := [][]int{}
 
 							mut directions := [Direction.north, .east, .south, .west]
+							rutil.shuffle(mut directions, 0)
+
 							for _ in 0 .. 4 {
-								rutil.shuffle(mut directions, 0)
 								dir := directions.pop()
 
 								if c.genome.direction_sensor.has(match_direction_to_gene(dir)) {
@@ -1079,9 +1080,9 @@ fn creature_reproduces(mut app App, mut row []GridTile, mut tile GridTile, i int
 
 									mut empty_neighbour := empty_neighbours.pop()
 									e_index := indicies_empty.pop()
+									
 									match empty_neighbour.occupation {
 										Empty {
-											// TODO: genome must be inherited from parents
 											mut genome := inherit_genome(c.genome, neighbour_c.genome)
 											genome = apply_genome_mutations(mut genome)
 											mut child := init_creature(genome: genome)
@@ -1094,6 +1095,7 @@ fn creature_reproduces(mut app App, mut row []GridTile, mut tile GridTile, i int
 										}
 									}
 									c.reproduced = true
+									c.remove_temp(effective_repro_cost)
 									tile.occupation = Occupied{c}
 
 									neighbour_c.reproduced = true
@@ -1149,10 +1151,6 @@ fn debug_movement(mut app App, tile GridTile, neighbour_tile GridTile) {
 }
 
 fn color_space(g Genome) gx.Color {
-	// c1 := ((byte - 0x70) % 0x8a) + 0x70
-	// c2 := ((byte - 0x70) % 0x8a) + 0x70
-	// c3 := ((byte - 0x70) % 0x8a) + 0x70
-
 	mut c := match g.metabolism {
 		.slow { gx.rgba(0x0, 0x0, 0x5b, 0xff) }
 		.normal { gx.rgba(0x0, 0x5b, 0x0, 0xff) }
@@ -1160,7 +1158,7 @@ fn color_space(g Genome) gx.Color {
 	}
 
 	if g.social.has(.predator) {
-		c = gx.rgba(c.r + 0x60, c.g, c.b, 0xff)
+		c = gx.rgba(c.r + 0x90, c.g, c.b, 0xff)
 	}
 
 	if g.social.has(.sharing) {
@@ -1168,7 +1166,7 @@ fn color_space(g Genome) gx.Color {
 	}
 
 	if g.immune_system.has(.defender) {
-		c = gx.rgba(c.r, c.g - 0x40, c.b + 0xA0, 0xff)
+		c = gx.rgba(c.r, c.g - 0x40, c.b + 0x60, 0xff)
 	}
 
 	c = match g.mutation_rate {
@@ -1235,7 +1233,6 @@ fn has_similiar_genome(g1 &Genome, g2 &Genome, range int) bool {
 		}
 		c += unsafe { g1b_index[i] - g2b_index[i] }
 	}
-	// print('$c|')
 	return c < range && c > (-range)
 }
 
@@ -1269,11 +1266,8 @@ fn rand_genome() Genome {
 		2 { SocialGene.sharing }
 		3 { SocialGene.sharing }
 		10 { SocialGene.predator }
+		11 { SocialGene.predator }
 		else { SocialGene.normal }
-	}
-
-	if social == .predator {
-		movement_gene = MovementGene.able
 	}
 
 	ageing := match rand.int_in_range(0, 5) {
@@ -1318,18 +1312,20 @@ fn rand_genome() Genome {
 fn inherit_genome(g1 Genome, g2 Genome) Genome {
 	// TODO: Some genes should be reduced or improved by one parent instead of picking
 	// one random of the parents
-	mut movement_genes := [g1.movement, g2.movement]
-	rutil.shuffle(mut movement_genes, 0)
+	mut movement_gene := g1.movement | g2.movement
 
 	mut metabolism_genes := [g1.metabolism, g2.metabolism]
 	rutil.shuffle(mut metabolism_genes, 0)
 
-	mut social_genes := [g1.social, g2.social]
-	rutil.shuffle(mut social_genes, 0)
-	social_gene := if rand.int_in_range(0, 4) == 0 {
-		social_genes[0] | social_genes[1]
+	added_s_genes := g1.social | g2.social
+	social_gene := if added_s_genes.all(.predator | .sharing) {
+		if random_chance(49) {
+			(SocialGene.normal | SocialGene.predator) & added_s_genes
+		} else {
+			(SocialGene.normal | SocialGene.sharing) & added_s_genes
+		}
 	} else {
-		social_genes[0]
+		g1.social | g2.social
 	}
 
 	mut ageing_genes := [g1.ageing, g2.ageing]
@@ -1396,7 +1392,7 @@ fn inherit_genome(g1 Genome, g2 Genome) Genome {
 	}
 
 	return Genome{
-		movement: movement_genes[0]
+		movement: movement_gene
 		direction_sensor: g1.direction_sensor | g2.direction_sensor
 		metabolism: metabolism_genes[0]
 		social: social_gene
@@ -1419,6 +1415,15 @@ fn apply_genome_mutations(mut g Genome) Genome {
 		.faster { 1250 }
 		.insane { 75 }
 	}
+
+	mut directions := [DirectionSensorGene.center, DirectionSensorGene.north, 
+	DirectionSensorGene.south, DirectionSensorGene.east, DirectionSensorGene.west]
+	rutil.shuffle(mut directions, 0)
+	mut direction_mutation := DirectionSensorGene{}
+	for j in 0..rand.int_in_range(0, 5) {
+		direction_mutation = direction_mutation | directions[j]
+	}
+
 	match rand.int_in_range(0, mutation_rate) {
 		0 { g.movement = MovementGene.unable }
 		1 { g.movement = MovementGene.able }
@@ -1446,34 +1451,8 @@ fn apply_genome_mutations(mut g Genome) Genome {
 		23 { g.mutation_rate = MutationRateGene.faster }
 		24 { g.mutation_rate = MutationRateGene.fast }
 		25 { g.mutation_rate = MutationRateGene.insane }
+		26 { g.direction_sensor = direction_mutation }
 		else {}
 	}
 	return g
 }
-
-// fn rand_color() gx.Color {
-// 	// c1 := rand.int_in_range(0,63)
-// 	// c2 := rand.int_in_range(64, 127)
-// 	// c3 := rand.int_in_range(127, 191)
-// Spytheman
-// you can also use binary numbers for the mask directly, and let V do the
-// conversion at comptime, if you want:
-// 0b0010_0000 is the same as 0x20, the same as 32
-// it is just more verbose
-// and remembering a small table of 16 hex digits that map 1:1 to blocks of 4 bits
-// is a good investment of time imho (since hex numbers come up in many contexts)
-// AntonC
-// range 64-128: The range length must be a multiple of 2 for this method to work
-// (rnd_byte & lower_bits) | upper_bits
-// (rnd_byte & 0x3f) | 0x40
-
-// AntonC
-// If you have a range that's not a multiple of two,
-// you can always default to the modulus idea
-// ((rnd - lower_bound) % upper_bound) + lower_bound
-
-// 	mut colors := [c1, c2, c3]
-// 	rutil.shuffle(mut colors, 0)
-
-// 	return gx.rgb(colors[0], colors[1], colors[2])
-// }
